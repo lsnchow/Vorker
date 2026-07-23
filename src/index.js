@@ -5,10 +5,6 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { runChat, runRepl } from "./cli.js";
-import { startRemoteServer } from "./server.js";
-import { runShare } from "./share.js";
-import { runTailnet } from "./tailscale.js";
 
 function printUsage() {
   console.log(`vorker
@@ -324,6 +320,7 @@ async function main() {
   }
 
   if (options.command === "chat") {
+    const { runChat } = await import("./cli.js");
     await runChat(options);
     return;
   }
@@ -339,21 +336,25 @@ async function main() {
   }
 
   if (options.command === "repl") {
+    const { runRepl } = await import("./cli.js");
     await runRepl(options);
     return;
   }
 
   if (options.command === "serve") {
+    const { startRemoteServer } = await import("./server.js");
     await startRemoteServer(options);
     return;
   }
 
   if (options.command === "share") {
+    const { runShare } = await import("./share.js");
     await runShare(options);
     return;
   }
 
   if (options.command === "tailnet" || options.command === "tailscale") {
+    const { runTailnet } = await import("./tailscale.js");
     await runTailnet(options);
     return;
   }

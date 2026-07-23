@@ -6,7 +6,7 @@ pub(crate) fn handle_workflow_action(
     app: &mut App,
     review_job: &mut Option<ReviewJob>,
     side_agent_store: &mut SideAgentStore,
-    side_agent_jobs: &mut Vec<SideAgentJob>,
+    side_agent_jobs: &mut [SideAgentJob],
     action: AppCommand,
 ) -> io::Result<()> {
     match action {

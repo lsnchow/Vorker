@@ -237,9 +237,6 @@ impl App {
             .or(default_model);
         thread.model = selected_model.clone();
 
-        let mut navigation = NavigationState::default();
-        navigation.focused_pane = Pane::Input;
-
         let rows: Vec<TranscriptRow> = snapshot
             .sessions
             .first()
@@ -272,8 +269,10 @@ impl App {
         let review_mode = current_review_mode();
         let review_scope = current_shell_review_scope();
 
-        let mut navigation = NavigationState::default();
-        navigation.focused_pane = Pane::Input;
+        let navigation = NavigationState {
+            focused_pane: Pane::Input,
+            ..NavigationState::default()
+        };
 
         Self {
             snapshot,
@@ -732,12 +731,11 @@ impl App {
                 model_picker_open: self.model_picker().is_open(),
                 command_buffer: self.composer().buffer().to_string(),
                 slash_menu_selected_index: self.composer().slash_selected_index(),
-                mention_items: self
-                    .bottom_pane
-                    .active_surface()
-                    .eq(&BottomPaneSurface::Mention)
-                    .then(|| self.popup().mention_items().to_vec())
-                    .unwrap_or_default(),
+                mention_items: if self.bottom_pane.active_surface() == BottomPaneSurface::Mention {
+                    self.popup().mention_items().to_vec()
+                } else {
+                    Vec::new()
+                },
                 mention_selected_index: self.popup().selected_index(),
                 permission_title: popup.0,
                 permission_items: popup.1,
@@ -1301,15 +1299,13 @@ impl App {
                     });
                 }
             }
-            SlashCommandId::Agent => {
-                match parse_agent_command(buffer) {
-                    Ok((count, prompt_text)) => {
-                        self.pending_actions
-                            .push(AppCommand::SpawnAgent { prompt_text, count });
-                    }
-                    Err(message) => self.apply_system_notice(message),
+            SlashCommandId::Agent => match parse_agent_command(buffer) {
+                Ok((count, prompt_text)) => {
+                    self.pending_actions
+                        .push(AppCommand::SpawnAgent { prompt_text, count });
                 }
-            }
+                Err(message) => self.apply_system_notice(message),
+            },
             SlashCommandId::Agents => {
                 self.pending_actions.push(AppCommand::ListAgents);
             }
@@ -2377,9 +2373,8 @@ fn dispatch_runtime_action(
 #[cfg(test)]
 mod tests {
     use super::{
-        App, SideAgentJob, normalize_for_raw_terminal, render_agent_roster,
-        render_status_summary, render_thread_timeline, render_thread_timeline_with_mode,
-        tool_update_text,
+        App, SideAgentJob, normalize_for_raw_terminal, render_agent_roster, render_status_summary,
+        render_thread_timeline, render_thread_timeline_with_mode, tool_update_text,
     };
     use crate::app::shell_helpers::{should_redraw_frame, summarize_transcript_rows};
     use crate::app::side_agent_helpers::{format_agent_result, resolve_agent_identifier};

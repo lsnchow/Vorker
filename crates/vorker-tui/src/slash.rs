@@ -401,7 +401,7 @@ pub const SLASH_COMMANDS: [SlashCommand; 30] = [
 impl SlashCommand {
     #[must_use]
     pub fn matches_exact(self, candidate: &str) -> bool {
-        self.name == candidate || self.aliases.iter().any(|alias| *alias == candidate)
+        self.name == candidate || self.aliases.contains(&candidate)
     }
 
     #[must_use]

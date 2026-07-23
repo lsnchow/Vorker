@@ -1,5 +1,6 @@
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_local_session_action(
     runtime: &tokio::runtime::Runtime,
     bridge: &mut AcpBridge,

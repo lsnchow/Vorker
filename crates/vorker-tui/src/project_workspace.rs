@@ -201,7 +201,7 @@ pub fn render_project_confirmation(
     width: usize,
     cwd: &str,
     workspace_path: &str,
-    color: bool,
+    _color: bool,
 ) -> String {
     let body = [
         " Use Vorker in this directory?".to_string(),
@@ -224,11 +224,7 @@ pub fn render_project_confirmation(
         lines.push(format!("│{content}│"));
     }
     lines.push(format!("╰{horizontal}╯"));
-    if color {
-        lines.join("\n")
-    } else {
-        lines.join("\n")
-    }
+    lines.join("\n")
 }
 
 fn default_root_path() -> PathBuf {

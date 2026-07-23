@@ -1,7 +1,13 @@
 node_modules/
 .next/
+coverage/
 certs/
 .DS_Store
+._*
+*.log
+*.tsbuildinfo
+.env*
+!.env.example
 .vorker-2/
 .worktrees/
 target/

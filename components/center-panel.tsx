@@ -292,13 +292,14 @@ function ConsoleMarkdown({ body, role }: { body: string; role: TranscriptEntry["
           ol: ({ children }) => <ol className="mb-2 list-decimal pl-5">{children}</ol>,
           li: ({ children }) => <li className="mb-1">{children}</li>,
           a: ({ children, href }) => <a className="text-primary underline underline-offset-2" href={href} target="_blank" rel="noreferrer">{children}</a>,
-          code: ({ inline, children }) =>
-            inline ? (
-              <code className="bg-background px-1 py-0.5 text-[0.95em] text-primary">{children}</code>
-            ) : (
-              <code className="block overflow-x-auto bg-background p-3 text-xs text-foreground">{children}</code>
-            ),
-          pre: ({ children }) => <pre className="mb-2 overflow-x-auto border border-border bg-background">{children}</pre>,
+          code: ({ children, className }) => (
+            <code className={cn("bg-background px-1 py-0.5 text-[0.95em] text-primary", className)}>{children}</code>
+          ),
+          pre: ({ children }) => (
+            <pre className="mb-2 overflow-x-auto border border-border bg-background p-3 text-xs text-foreground [&>code]:bg-transparent [&>code]:p-0 [&>code]:text-inherit">
+              {children}
+            </pre>
+          ),
           blockquote: ({ children }) => <blockquote className="mb-2 border-l border-primary pl-3 text-muted-foreground">{children}</blockquote>,
           h1: ({ children }) => <h1 className="mb-2 text-base font-semibold text-foreground text-balance">{children}</h1>,
           h2: ({ children }) => <h2 className="mb-2 text-sm font-semibold text-foreground text-balance">{children}</h2>,

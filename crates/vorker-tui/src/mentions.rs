@@ -39,9 +39,7 @@ pub fn filter_mention_items(query: &str, paths: &[String]) -> Vec<String> {
         .map(|(index, path)| {
             let lower = path.to_ascii_lowercase();
             let basename = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
-            let score = if query.is_empty() {
-                0
-            } else if basename.starts_with(&query) {
+            let score = if query.is_empty() || basename.starts_with(&query) {
                 0
             } else if lower.contains(&query) {
                 1
@@ -52,7 +50,7 @@ pub fn filter_mention_items(query: &str, paths: &[String]) -> Vec<String> {
         })
         .collect();
 
-    scored.sort_by(|left, right| left.cmp(right));
+    scored.sort();
     scored
         .into_iter()
         .map(|(_, _, path)| path)

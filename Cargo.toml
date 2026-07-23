@@ -11,5 +11,5 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-license = "ISC"
+license = "0BSD"
 version = "0.1.0"

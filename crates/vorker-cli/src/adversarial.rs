@@ -260,7 +260,7 @@ fn collect_review_context(
 
     if scope == ReviewScope::Branch {
         let Some(base) = base else {
-            return Err(io::Error::other("branch review requires --base <ref>").into());
+            return Err(io::Error::other("branch review requires --base <ref>"));
         };
         ensure_git_repository(cwd)?;
         let summary = run_git(cwd, ["diff", "--shortstat", &format!("{base}...HEAD")])?;

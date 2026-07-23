@@ -20,7 +20,6 @@
     "tui": "sh scripts/run-rust-tui.sh",
     "tui:js": "node src/index.js tui",
     "tui:once": "sh scripts/run-rust-tui.sh --once",
-    "agent:codex:tui": "sh scripts/run-codex-agent.sh",
     "dev": "next dev",
     "build": "next build",
     "test:unit": "node --test tests/*.test.js",
@@ -28,7 +27,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "0BSD",
   "type": "module",
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.16.1",

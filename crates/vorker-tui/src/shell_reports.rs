@@ -22,6 +22,7 @@ pub fn format_path_for_humans(path: &Path) -> String {
     raw
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_status_summary(
     model: &str,
     cwd: &str,
@@ -79,7 +80,10 @@ pub fn render_agent_roster(jobs: &[StoredSideAgentJob]) -> String {
         ));
         lines.push(format!("  id: {}", job.id));
         lines.push(format!("  model: {}", job.model));
-        lines.push(format!("  cwd: {}", format_path_for_humans(Path::new(&job.cwd))));
+        lines.push(format!(
+            "  cwd: {}",
+            format_path_for_humans(Path::new(&job.cwd))
+        ));
         lines.push(format!("  elapsed: {}", format_thread_duration(elapsed)));
         lines.push(format!("  prompt: {}", job.prompt));
     }

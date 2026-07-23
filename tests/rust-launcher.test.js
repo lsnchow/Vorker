@@ -5,6 +5,14 @@ import { promisify } from "node:util";
 import path from "node:path";
 
 const execFileAsync = promisify(execFile);
+const optionalRuntimeBlocker = `data:text/javascript,${encodeURIComponent(`
+export async function resolve(specifier, context, nextResolve) {
+  if (["@agentclientprotocol/sdk", "next", "ws"].includes(specifier)) {
+    throw new Error("Optional Node runtime loaded: " + specifier);
+  }
+  return nextResolve(specifier, context);
+}
+`)}`;
 
 test("Rust TUI launcher script boots the one-shot chat shell", async () => {
   const scriptPath = path.join(process.cwd(), "scripts", "run-rust-tui.sh");
@@ -20,9 +28,13 @@ test("Rust TUI launcher script boots the one-shot chat shell", async () => {
 });
 
 test("node bin wrapper routes bare vorker to the Rust shell", async () => {
-  const { stdout } = await execFileAsync("node", ["src/index.js", "--once"], {
-    cwd: process.cwd(),
-  });
+  const { stdout } = await execFileAsync(
+    "node",
+    ["--no-warnings", "--experimental-loader", optionalRuntimeBlocker, "src/index.js", "--once"],
+    {
+      cwd: process.cwd(),
+    },
+  );
 
   assert.match(stdout, />_ Vorker \(v0\.1\.0\)/);
   assert.match(stdout, /claude-opus-4\.5/);
