@@ -69,6 +69,18 @@ npm run rust:test
 npm run rust:check
 ```
 
+## Prompt benchmark
+
+Run a small prompt ablation on three pinned Python tasks from the open-source [Aider Polyglot benchmark](https://github.com/Aider-AI/polyglot-benchmark):
+
+```bash
+npm run benchmark -- --provider copilot --model auto --repeat 1
+```
+
+The Copilot model, tools, task, user prompt, reasoning level, and scorer stay fixed. The baseline disables repository instructions; the Vorker variant loads its eval-and-verification loop through `AGENTS.md`. Reports are written as JSON and Markdown under `benchmarks/results/`. This smoke subset is reproducible evidence, not an Aider leaderboard result.
+
+See [benchmark methodology and the recorded regression run](benchmarks/README.md).
+
 Provider-backed commands use your local Copilot/Codex authentication. Remote sharing disables agent auto-approval unless you explicitly opt in.
 
 ## License

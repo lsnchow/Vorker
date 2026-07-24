@@ -17,6 +17,7 @@ Usage:
   vorker demo <scenario>
   vorker repl [options]
   vorker chat [options] "<prompt>"
+  vorker benchmark [options]
   vorker worktree list
   vorker worktree create <name> [title...]
   vorker worktree remove <name> [--force]
@@ -48,6 +49,17 @@ RALPH options:
   --xhigh                Launch RALPH with extra-high reasoning
   --dry-run              Print the RALPH launch command without executing it
 
+Benchmark options:
+  --tasks <a,b,c>        Aider Polyglot Python tasks (default: three-task smoke set)
+  --repeat <n>           Trials per task and prompt variant (default: 1)
+  --variant <name>       baseline, vorker, or both (default: both)
+  --provider <id>        Benchmark provider: copilot or codex (default: copilot)
+  --reasoning <level>    Reasoning level held constant across variants (default: auto)
+  --source <path>        Existing Aider Polyglot checkout instead of the pinned cache
+  --output <path>        JSON report path; a Markdown report is written beside it
+  --timeout <seconds>    Per-agent timeout (default: 180)
+  --keep-workspaces      Preserve temporary trial repositories for inspection
+
 Server options:
   --host <host>          Bind address for the web server (default: 127.0.0.1)
   --port <port>          Port for the web server (default: 4173)
@@ -77,6 +89,7 @@ Examples:
   vorker demo hyperloop
   vorker repl
   vorker chat "summarize this repo"
+  vorker benchmark --model auto --repeat 1
   vorker worktree create task-7 "stabilize auth retries"
   vorker worktree list
   VORKER_PASSWORD=secret vorker serve --host 127.0.0.1 --port 4173
@@ -123,6 +136,14 @@ function parseCli(argv) {
       "no-deslop": { type: "boolean", default: false },
       xhigh: { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
+      tasks: { type: "string" },
+      repeat: { type: "string" },
+      variant: { type: "string" },
+      reasoning: { type: "string" },
+      source: { type: "string" },
+      output: { type: "string" },
+      timeout: { type: "string" },
+      "keep-workspaces": { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -151,6 +172,16 @@ function parseCli(argv) {
     noDeslop: values["no-deslop"],
     xhigh: values.xhigh,
     dryRun: values["dry-run"],
+    benchmarkTasks: values.tasks ?? null,
+    benchmarkRepeats: values.repeat ?? "1",
+    benchmarkVariant: values.variant ?? "both",
+    benchmarkReasoning: values.reasoning ?? "auto",
+    benchmarkSource: values.source ?? null,
+    benchmarkOutput: values.output ?? null,
+    benchmarkTimeout: values.timeout ?? "180",
+    benchmarkModel: values.model ?? process.env.VORKER_BENCH_MODEL ?? "auto",
+    benchmarkProvider: values.provider ?? process.env.VORKER_BENCH_PROVIDER ?? "copilot",
+    keepWorkspaces: values["keep-workspaces"],
     host: values.host ?? "127.0.0.1",
     port: values.port ?? "4173",
     tlsKey: values["tls-key"] ?? null,
@@ -356,6 +387,12 @@ async function main() {
   if (options.command === "worktree") {
     const { runWorktree } = await import("./worktree.js");
     await runWorktree(options);
+    return;
+  }
+
+  if (options.command === "benchmark") {
+    const { runBenchmarkCommand } = await import("./benchmark.js");
+    await runBenchmarkCommand(options);
     return;
   }
 

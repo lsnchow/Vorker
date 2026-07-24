@@ -7,7 +7,7 @@
   },
   "scripts": {
     "check": "node --check src/index.js",
-    "check:server": "node --check src/index.js && node --check src/cli.js && node --check src/copilot.js && node --check src/server.js && node --check src/orchestrator.js && node --check src/git/task-workspace.js && node --check src/worktree.js && node --check src/skills.js && node --check src/tunnel.js && node --check src/share.js && node --check src/tailscale.js",
+    "check:server": "node --check src/index.js && node --check src/benchmark.js && node --check src/cli.js && node --check src/copilot.js && node --check src/server.js && node --check src/orchestrator.js && node --check src/git/task-workspace.js && node --check src/worktree.js && node --check src/skills.js && node --check src/tunnel.js && node --check src/share.js && node --check src/tailscale.js",
     "check:web": "next build",
     "check:all": "npm run check:server && npm run check:web",
     "rust:check": "source \"$HOME/.cargo/env\" && cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings",
@@ -21,7 +21,8 @@
     "tui:once": "sh scripts/run-rust-tui.sh --once",
     "dev": "next dev",
     "build": "next build",
-    "test:unit": "node --test tests/*.test.js",
+    "benchmark": "node src/index.js benchmark",
+    "test:unit": "node --test --test-concurrency=1 tests/*.test.js",
     "test": "npm run test:unit && npm run check:all"
   },
   "keywords": [],

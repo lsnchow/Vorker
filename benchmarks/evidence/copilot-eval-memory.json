@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-24T02:52:08.890Z",
+  "sourceReportSha256": "329cf80868f3ad056af425554753f91bb4f2882cae2451d94d59a299a6423efe",
+  "upstream": {
+    "name": "Aider Polyglot",
+    "url": "https://github.com/Aider-AI/polyglot-benchmark.git",
+    "commit": "7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f"
+  },
+  "config": {
+    "tasks": ["two-bucket"],
+    "variants": ["baseline", "vorker"],
+    "repeats": 2,
+    "provider": "copilot",
+    "model": "auto",
+    "reasoning": "auto",
+    "timeoutMs": 20000,
+    "userPrompt": "Complete this Aider Polyglot exercise. Implement the production code so all existing tests pass. Do not modify tests. Work directly in the repository and finish the task."
+  },
+  "summary": {
+    "baseline": {
+      "passed": 0,
+      "total": 2,
+      "passRate": 0,
+      "meanDurationMs": 20605,
+      "testCasesPassed": 0,
+      "testCasesTotal": 18,
+      "testPassRate": 0
+    },
+    "vorker": {
+      "passed": 1,
+      "total": 2,
+      "passRate": 0.5,
+      "meanDurationMs": 20317,
+      "testCasesPassed": 9,
+      "testCasesTotal": 18,
+      "testPassRate": 0.5
+    }
+  },
+  "results": [
+    {
+      "task": "two-bucket",
+      "variant": "baseline",
+      "repeat": 0,
+      "passed": false,
+      "timedOut": true,
+      "durationMs": 20833,
+      "resolvedModel": "gpt-5.3-codex",
+      "testCasesPassed": 0,
+      "testCasesTotal": 9,
+      "agentExitCode": 0,
+      "scorerExitCode": 1,
+      "testsUntouched": true,
+      "evalMemory": null,
+      "changedFiles": [],
+      "premiumRequests": 0
+    },
+    {
+      "task": "two-bucket",
+      "variant": "vorker",
+      "repeat": 0,
+      "passed": false,
+      "timedOut": true,
+      "durationMs": 20348,
+      "resolvedModel": "gpt-5.3-codex",
+      "testCasesPassed": 0,
+      "testCasesTotal": 9,
+      "agentExitCode": 0,
+      "scorerExitCode": 1,
+      "testsUntouched": true,
+      "evalMemory": "benchmarks/evals/two-bucket.md",
+      "changedFiles": [],
+      "premiumRequests": 0
+    },
+    {
+      "task": "two-bucket",
+      "variant": "vorker",
+      "repeat": 1,
+      "passed": true,
+      "timedOut": true,
+      "durationMs": 20286,
+      "resolvedModel": "gpt-5.3-codex",
+      "testCasesPassed": 9,
+      "testCasesTotal": 9,
+      "agentExitCode": 0,
+      "scorerExitCode": 0,
+      "testsUntouched": true,
+      "evalMemory": "benchmarks/evals/two-bucket.md",
+      "changedFiles": ["two_bucket.py"],
+      "premiumRequests": 0
+    },
+    {
+      "task": "two-bucket",
+      "variant": "baseline",
+      "repeat": 1,
+      "passed": false,
+      "timedOut": true,
+      "durationMs": 20376,
+      "resolvedModel": "gpt-5.3-codex",
+      "testCasesPassed": 0,
+      "testCasesTotal": 9,
+      "agentExitCode": 0,
+      "scorerExitCode": 1,
+      "testsUntouched": true,
+      "evalMemory": null,
+      "changedFiles": [],
+      "premiumRequests": 0
+    }
+  ]
+}
