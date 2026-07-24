@@ -77,7 +77,12 @@ function parseCookies(cookieHeader = "") {
     if (!rawKey) {
       continue;
     }
-    cookies[rawKey] = decodeURIComponent(rest.join("="));
+    const rawValue = rest.join("=");
+    try {
+      cookies[rawKey] = decodeURIComponent(rawValue);
+    } catch {
+      cookies[rawKey] = rawValue;
+    }
   }
   return cookies;
 }
@@ -543,6 +548,38 @@ function safeError(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+async function closeNodeServer(server) {
+  if (!server?.listening) {
+    return;
+  }
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function closeWebSocketServer(server, clients) {
+  for (const client of clients) {
+    client.close();
+  }
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
 function getRequestSecurity(req, normalized) {
   if (normalized.secureTransport || req.socket.encrypted) {
     return true;
@@ -664,6 +701,16 @@ export async function startRemoteServer(options) {
   };
 
   const permissionBroker = createPermissionBroker({ broadcast });
+  const shouldBlockClientAutoApprove = () =>
+    process.env.VORKER_ALLOW_REMOTE_AUTO_APPROVE !== "1" && (normalized.trustProxy || tunnelManager.state !== "idle");
+  const disableAllAgentAutoApprove = async () => {
+    const agentsWithAutoApprove = manager.listAgents().filter((agent) => agent.autoApprove);
+    await Promise.all(
+      agentsWithAutoApprove.map(async (agent) => {
+        await manager.updateAgent(agent.id, { autoApprove: false });
+      }),
+    );
+  };
 
   const refreshSkills = async () => {
     skillCatalog.setWorkspaceRoots([normalized.cwd, ...manager.listAgents().map((agent) => agent.cwd)]);
@@ -720,7 +767,7 @@ export async function startRemoteServer(options) {
           role: payload.role ? String(payload.role) : "worker",
           notes: payload.notes ? String(payload.notes) : "",
           skillIds: Array.isArray(payload.skillIds) ? payload.skillIds.map((value) => String(value)) : [],
-          autoApprove: Boolean(payload.autoApprove),
+          autoApprove: shouldBlockClientAutoApprove() ? false : Boolean(payload.autoApprove),
           permissionHandler: async ({ request, agent: session }) =>
             await permissionBroker.waitForDecision(session.id, request),
         });
@@ -736,7 +783,12 @@ export async function startRemoteServer(options) {
           skillIds: Array.isArray(payload.skillIds) ? payload.skillIds.map((value) => String(value)) : undefined,
           mode: payload.mode ? String(payload.mode) : undefined,
           model: payload.model ? String(payload.model) : undefined,
-          autoApprove: typeof payload.autoApprove === "boolean" ? payload.autoApprove : undefined,
+          autoApprove:
+            typeof payload.autoApprove === "boolean"
+              ? shouldBlockClientAutoApprove()
+                ? false
+                : payload.autoApprove
+              : undefined,
         });
         await refreshSkills();
         return { type: "agent_state", agent: session.snapshot() };
@@ -856,6 +908,7 @@ export async function startRemoteServer(options) {
       case "share_start":
         void fireAndBroadcast(
           async () => {
+            await disableAllAgentAutoApprove();
             await tunnelManager.start({
               cloudflaredBin: payload.cloudflaredBin ? String(payload.cloudflaredBin) : undefined,
               edgeProtocol: payload.edgeProtocol ? String(payload.edgeProtocol) : undefined,
@@ -1213,6 +1266,11 @@ export async function startRemoteServer(options) {
     server.once("error", reject);
     server.listen(normalized.port, normalized.host, () => {
       server.removeListener("error", reject);
+      const address = server.address();
+      if (address && typeof address !== "string" && Number.isInteger(address.port) && address.port > 0) {
+        normalized.port = address.port;
+        tunnelManager.setPort(address.port);
+      }
       resolve();
     });
   });
@@ -1232,23 +1290,37 @@ export async function startRemoteServer(options) {
   }
 
   const shutdown = async () => {
+    removeSignalHandlers();
     await tunnelManager.stop().catch(() => {});
     await supervisor.close();
     await manager.closeAll();
-    wsServer.close();
-    server.close();
+    await closeWebSocketServer(wsServer, wsClients).catch(() => {});
+    await closeNodeServer(server);
     if (typeof nextApp.close === "function") {
       await nextApp.close();
     }
   };
 
+  let signalHandlersInstalled = false;
+  const handleSigint = () => {
+    void shutdown().finally(() => process.exit(0));
+  };
+  const handleSigterm = () => {
+    void shutdown().finally(() => process.exit(0));
+  };
+  const removeSignalHandlers = () => {
+    if (!signalHandlersInstalled) {
+      return;
+    }
+    signalHandlersInstalled = false;
+    process.removeListener("SIGINT", handleSigint);
+    process.removeListener("SIGTERM", handleSigterm);
+  };
+
   if (options.installSignalHandlers !== false) {
-    process.on("SIGINT", () => {
-      void shutdown().finally(() => process.exit(0));
-    });
-    process.on("SIGTERM", () => {
-      void shutdown().finally(() => process.exit(0));
-    });
+    process.on("SIGINT", handleSigint);
+    process.on("SIGTERM", handleSigterm);
+    signalHandlersInstalled = true;
   }
 
   return {

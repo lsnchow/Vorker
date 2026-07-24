@@ -17,6 +17,9 @@ Usage:
   vorker demo <scenario>
   vorker repl [options]
   vorker chat [options] "<prompt>"
+  vorker worktree list
+  vorker worktree create <name> [title...]
+  vorker worktree remove <name> [--force]
   vorker serve [options]
   vorker share [options]
   vorker tailnet [options]
@@ -74,6 +77,8 @@ Examples:
   vorker demo hyperloop
   vorker repl
   vorker chat "summarize this repo"
+  vorker worktree create task-7 "stabilize auth retries"
+  vorker worktree list
   VORKER_PASSWORD=secret vorker serve --host 127.0.0.1 --port 4173
   VORKER_PASSWORD=secret vorker share
   VORKER_PASSWORD=secret vorker tailnet
@@ -107,6 +112,7 @@ function parseCli(argv) {
       "tls-cert": { type: "string" },
       "trust-proxy": { type: "boolean", default: false },
       "allow-insecure-http": { type: "boolean", default: false },
+      force: { type: "boolean", default: false },
       "cloudflared-bin": { type: "string" },
       "cloudflared-protocol": { type: "string" },
       "cloudflared-edge-ip-version": { type: "string" },
@@ -151,6 +157,7 @@ function parseCli(argv) {
     tlsCert: values["tls-cert"] ?? null,
     trustProxy: values["trust-proxy"],
     allowInsecureHttp: values["allow-insecure-http"],
+    force: values.force,
     cloudflaredBin: values["cloudflared-bin"] ?? process.env.CLOUDFLARED_BIN ?? "cloudflared",
     cloudflaredProtocol: values["cloudflared-protocol"] ?? process.env.CLOUDFLARED_PROTOCOL ?? "http2",
     cloudflaredEdgeIpVersion:
@@ -315,6 +322,11 @@ async function main() {
       await runRustCli(options);
       return;
     }
+    if (options.command === "worktree") {
+      const { runWorktree } = await import("./worktree.js");
+      await runWorktree(options);
+      return;
+    }
     printUsage();
     return;
   }
@@ -338,6 +350,12 @@ async function main() {
   if (options.command === "repl") {
     const { runRepl } = await import("./cli.js");
     await runRepl(options);
+    return;
+  }
+
+  if (options.command === "worktree") {
+    const { runWorktree } = await import("./worktree.js");
+    await runWorktree(options);
     return;
   }
 

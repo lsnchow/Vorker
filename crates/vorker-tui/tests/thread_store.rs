@@ -9,7 +9,7 @@ fn unique_temp_dir(name: &str) -> std::path::PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("time")
         .as_nanos();
-    std::env::temp_dir().join(format!("vorker-tui-{name}-{suffix}"))
+    std::env::temp_dir().join(format!("vorker-tui-{name}-{}-{suffix}", std::process::id()))
 }
 
 #[test]

@@ -68,6 +68,23 @@ export async function runShare(options) {
   let announcedReady = false;
   let edgeConnectivityErrorCount = 0;
   let lastEdgeConnectivityError = null;
+  let signalHandlersInstalled = false;
+
+  const handleSigint = () => {
+    void shutdownAndExit();
+  };
+  const handleSigterm = () => {
+    void shutdownAndExit();
+  };
+
+  const removeSignalHandlers = () => {
+    if (!signalHandlersInstalled) {
+      return;
+    }
+    signalHandlersInstalled = false;
+    process.removeListener("SIGINT", handleSigint);
+    process.removeListener("SIGTERM", handleSigterm);
+  };
 
   const maybeAnnounceReady = () => {
     if (!publicUrl || !tunnelRegistered || announcedReady) {
@@ -87,6 +104,7 @@ export async function runShare(options) {
       return;
     }
     shuttingDown = true;
+    removeSignalHandlers();
 
     if (!child.killed) {
       child.kill("SIGTERM");
@@ -214,12 +232,9 @@ export async function runShare(options) {
     process.exit(0);
   };
 
-  process.on("SIGINT", () => {
-    void shutdownAndExit();
-  });
-  process.on("SIGTERM", () => {
-    void shutdownAndExit();
-  });
+  process.on("SIGINT", handleSigint);
+  process.on("SIGTERM", handleSigterm);
+  signalHandlersInstalled = true;
 
   await exitPromise;
 }

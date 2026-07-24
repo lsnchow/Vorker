@@ -8,7 +8,7 @@
 
 </div>
 
-Vorker wraps a fast Rust shell around Copilot ACP, project context, adversarial review, and Codex-backed side agents. Threads, reports, skills, and agent logs stay local under `~/.vorker`.
+Vorker wraps a fast Rust shell around Copilot ACP, project context, adversarial review, Codex-backed side agents, and isolated git task worktrees. Threads, reports, skills, and agent logs stay local under `~/.vorker`.
 
 ![Vorker loading a project workspace](docs/assets/vorker-loading.png)
 
@@ -22,6 +22,7 @@ Requires Node.js, Rust, and an authenticated [GitHub Copilot CLI](https://docs.g
 git clone https://github.com/lsnchow/vorker-2.git
 cd vorker-2
 npm ci
+npm run rust:build
 npm link
 vorker
 ```
@@ -31,6 +32,7 @@ vorker
 - Runs a scrollback-friendly Rust coding shell with slash commands and `@file` context.
 - Adds adversarial review, coaching, and patch workflows.
 - Spawns bounded Codex side agents for parallel investigation.
+- Creates isolated task branches under `.vorker-2/worktrees`.
 - Keeps project threads, history, reports, and skills on your machine.
 - Offers an optional web control plane for remote sessions.
 
@@ -40,6 +42,7 @@ flowchart LR
     TUI --> ACP["Copilot ACP"]
     TUI --> REVIEW["Review loop"]
     TUI --> AGENTS["Codex side agents"]
+    AGENTS --> WORKTREES["Git worktrees"]
     TUI --> STATE[("Local project state")]
     CLI -. optional .-> WEB["Web control plane"]
 ```
@@ -49,6 +52,8 @@ flowchart LR
 ```bash
 vorker                                      # open the project shell
 vorker adversarial --coach "review this"   # run a coached review
+vorker worktree create auth "retry fixes"  # create an isolated workspace
+vorker worktree list                        # list managed worktrees
 vorker demo hyperloop                       # render the bundled demo
 VORKER_PASSWORD=secret vorker serve         # start the local web UI
 ```
@@ -64,7 +69,7 @@ npm run rust:test
 npm run rust:check
 ```
 
-Vorker is an active prototype; provider-backed flows depend on your local Copilot/Codex setup.
+Provider-backed commands use your local Copilot/Codex authentication. Remote sharing disables agent auto-approval unless you explicitly opt in.
 
 ## License
 

@@ -188,6 +188,12 @@ pub enum AppCommand {
     },
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RuntimeOptions {
+    pub copilot_bin: Option<String>,
+    pub default_model: Option<String>,
+}
+
 pub struct App {
     pub snapshot: Snapshot,
     pub navigation: NavigationState,
@@ -1706,10 +1712,68 @@ fn normalize_for_raw_terminal(frame: &str) -> String {
     output
 }
 
+struct TerminalSession {
+    alt_screen: bool,
+}
+
+impl TerminalSession {
+    fn start(stdout: &mut io::Stdout, no_alt_screen: bool) -> io::Result<Self> {
+        enable_raw_mode()?;
+        let alt_screen = !no_alt_screen;
+        if alt_screen && let Err(error) = execute!(stdout, EnterAlternateScreen, Hide) {
+            let _ = disable_raw_mode();
+            return Err(error);
+        }
+        Ok(Self { alt_screen })
+    }
+}
+
+impl Drop for TerminalSession {
+    fn drop(&mut self) {
+        if self.alt_screen {
+            let mut stdout = io::stdout();
+            let _ = execute!(stdout, Show, LeaveAlternateScreen);
+        }
+        let _ = disable_raw_mode();
+    }
+}
+
+fn bridge_initial_model(app: &App, runtime_options: &RuntimeOptions) -> Option<String> {
+    app.selected_model_id()
+        .map(str::to_string)
+        .or_else(|| runtime_options.default_model.clone())
+}
+
+fn start_bridge_for_app(
+    runtime: &tokio::runtime::Runtime,
+    cwd: &Path,
+    app: &App,
+    runtime_options: &RuntimeOptions,
+) -> io::Result<AcpBridge> {
+    runtime.block_on(AcpBridge::start(
+        cwd.to_path_buf(),
+        runtime_options.copilot_bin.clone(),
+        bridge_initial_model(app, runtime_options),
+    ))
+}
+
+pub(crate) fn replace_bridge_for_app(
+    runtime: &tokio::runtime::Runtime,
+    bridge: &mut AcpBridge,
+    cwd: &Path,
+    app: &App,
+    runtime_options: &RuntimeOptions,
+) -> io::Result<()> {
+    let next_bridge = start_bridge_for_app(runtime, cwd, app, runtime_options)?;
+    let old_bridge = std::mem::replace(bridge, next_bridge);
+    runtime.block_on(old_bridge.shutdown())?;
+    Ok(())
+}
+
 pub fn run_app(
     no_alt_screen: bool,
     auto_approve: bool,
-    default_model: Option<String>,
+    runtime_options: RuntimeOptions,
 ) -> io::Result<()> {
     let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut workspace = ProjectWorkspace::for_cwd(&cwd)?;
@@ -1723,7 +1787,9 @@ pub fn run_app(
         .latest_for_cwd(&cwd)
         .unwrap_or_else(|| thread_store.create_thread(&cwd));
     initial_thread = hydrate_thread_from_events(initial_thread, &session_event_store)?;
-    initial_thread.model = initial_thread.model.or(default_model.clone());
+    initial_thread.model = initial_thread
+        .model
+        .or(runtime_options.default_model.clone());
     if auto_approve {
         initial_thread.approval_mode = ApprovalMode::Auto;
     }
@@ -1740,34 +1806,11 @@ pub fn run_app(
         }
     }
     app.set_workspace_files(load_workspace_files(&cwd));
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(io::Error::other)?;
-    let mut bridge =
-        runtime.block_on(AcpBridge::start(cwd.clone(), None, default_model.clone()))?;
-    let mut pending_permission_reply = None;
-    enable_raw_mode()?;
     let mut stdout = io::stdout();
-
-    if !no_alt_screen {
-        execute!(stdout, EnterAlternateScreen, Hide)?;
-    }
-
-    run_boot_sequence(
-        &mut stdout,
-        &mut app,
-        &mut bridge,
-        &mut pending_permission_reply,
-    )?;
+    let _terminal_session = TerminalSession::start(&mut stdout, no_alt_screen)?;
     if !workspace.is_confirmed() {
         let confirmed = confirm_project_workspace(&mut stdout, &workspace)?;
         if !confirmed {
-            let _ = runtime.block_on(bridge.shutdown());
-            if !no_alt_screen {
-                execute!(stdout, Show, LeaveAlternateScreen)?;
-            }
-            disable_raw_mode()?;
             return Ok(());
         }
         thread_store = workspace.open_thread_store()?;
@@ -1780,6 +1823,22 @@ pub fn run_app(
             "Project workspace ready: {}",
             format_path_for_humans(&workspace.project_dir())
         ));
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(io::Error::other)?;
+    let mut bridge = start_bridge_for_app(&runtime, &cwd, &app, &runtime_options)?;
+    let mut pending_permission_reply = None;
+
+    if let Err(error) = run_boot_sequence(
+        &mut stdout,
+        &mut app,
+        &mut bridge,
+        &mut pending_permission_reply,
+    ) {
+        let _ = runtime.block_on(bridge.shutdown());
+        return Err(error);
     }
 
     let mut review_job = None;
@@ -1831,7 +1890,7 @@ pub fn run_app(
                 &mut app,
                 &mut stdout,
                 &global_root,
-                &default_model,
+                &runtime_options,
                 &mut cwd,
                 &mut workspace,
                 &mut thread_store,
@@ -1855,10 +1914,6 @@ pub fn run_app(
         let _ = reply.send(None);
     }
     let _ = runtime.block_on(bridge.shutdown());
-    if !no_alt_screen {
-        execute!(stdout, Show, LeaveAlternateScreen)?;
-    }
-    disable_raw_mode()?;
     Ok(())
 }
 
@@ -1869,7 +1924,7 @@ fn dispatch_runtime_action(
     app: &mut App,
     stdout: &mut io::Stdout,
     global_root: &Path,
-    default_model: &Option<String>,
+    runtime_options: &RuntimeOptions,
     cwd: &mut PathBuf,
     workspace: &mut ProjectWorkspace,
     thread_store: &mut ThreadStore,
@@ -1889,7 +1944,7 @@ fn dispatch_runtime_action(
             app,
             stdout,
             global_root,
-            default_model,
+            runtime_options,
             cwd,
             workspace,
             thread_store,
@@ -1906,7 +1961,7 @@ fn dispatch_runtime_action(
             app,
             stdout,
             global_root,
-            default_model,
+            runtime_options,
             cwd,
             workspace,
             thread_store,
@@ -1924,7 +1979,7 @@ fn dispatch_runtime_action(
                 app,
                 stdout,
                 global_root,
-                default_model,
+                runtime_options,
                 cwd,
                 workspace,
                 thread_store,
@@ -1943,7 +1998,7 @@ fn dispatch_runtime_action(
                 app,
                 stdout,
                 global_root,
-                default_model,
+                runtime_options,
                 cwd,
                 workspace,
                 thread_store,

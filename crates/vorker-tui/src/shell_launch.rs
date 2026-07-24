@@ -12,15 +12,7 @@ pub fn open_review_window(
     #[cfg(target_os = "macos")]
     {
         let scope = scope.unwrap_or_else(|| "auto".to_string());
-        let command = format!(
-            "cd '{}' && VORKER_THEME=review VORKER_REVIEW_MODE=1 VORKER_REVIEW_AUTO=1 VORKER_REVIEW_SCOPE={} VORKER_REVIEW_COACH={} VORKER_REVIEW_APPLY={} VORKER_REVIEW_FOCUS='{}' vorker --model {}",
-            escape_single_quotes(&cwd.display().to_string()),
-            scope,
-            if coach { "1" } else { "0" },
-            if apply { "1" } else { "0" },
-            escape_single_quotes(focus),
-            shell_escape_arg(model),
-        );
+        let command = build_review_shell_command(cwd, model, &scope, coach, apply, focus);
         let script = format!(
             "tell application \"Terminal\" to do script \"{}\"",
             command.replace('\\', "\\\\").replace('"', "\\\"")
@@ -91,6 +83,25 @@ fn escape_single_quotes(input: &str) -> String {
     input.replace('\'', "'\"'\"'")
 }
 
+fn build_review_shell_command(
+    cwd: &Path,
+    model: &str,
+    scope: &str,
+    coach: bool,
+    apply: bool,
+    focus: &str,
+) -> String {
+    format!(
+        "cd '{}' && VORKER_THEME=review VORKER_REVIEW_MODE=1 VORKER_REVIEW_AUTO=1 VORKER_REVIEW_SCOPE={} VORKER_REVIEW_COACH={} VORKER_REVIEW_APPLY={} VORKER_REVIEW_FOCUS={} vorker --model {}",
+        escape_single_quotes(&cwd.display().to_string()),
+        shell_escape_arg(scope),
+        if coach { "1" } else { "0" },
+        if apply { "1" } else { "0" },
+        shell_escape_arg(focus),
+        shell_escape_arg(model),
+    )
+}
+
 fn shell_escape_arg(input: &str) -> String {
     if input
         .chars()
@@ -99,5 +110,28 @@ fn shell_escape_arg(input: &str) -> String {
         input.to_string()
     } else {
         format!("'{}'", escape_single_quotes(input))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_review_shell_command;
+    use std::path::Path;
+
+    #[test]
+    fn review_shell_command_escapes_scope_values_before_exporting_them() {
+        let command = build_review_shell_command(
+            Path::new("/workspace"),
+            "gpt-5.4",
+            "staged'; touch /tmp/pwned #",
+            false,
+            false,
+            "focus",
+        );
+
+        assert!(
+            command.contains("VORKER_REVIEW_SCOPE='staged'\"'\"'; touch /tmp/pwned #'"),
+            "scope should be shell-escaped before interpolation:\n{command}"
+        );
     }
 }

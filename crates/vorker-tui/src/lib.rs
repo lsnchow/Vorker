@@ -29,7 +29,7 @@ mod thread_store;
 mod transcript_export;
 mod workspace_helpers;
 
-pub use app::{App, AppCommand, PermissionOptionView, render_once, run_app};
+pub use app::{App, AppCommand, PermissionOptionView, RuntimeOptions, render_once, run_app};
 pub use boot::{BootStep, boot_minimum_ticks, render_boot_frame};
 pub use bottom_pane_state::{
     BottomPaneDispatch, BottomPaneEscapeAction, BottomPaneState, BottomPaneSurface,

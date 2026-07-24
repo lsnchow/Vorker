@@ -1,4 +1,5 @@
 use super::*;
+use std::ffi::OsString;
 use std::process::Stdio;
 
 pub(crate) fn current_shell_review_scope() -> Option<String> {
@@ -21,21 +22,8 @@ pub(crate) fn spawn_side_agent(
     let events_path = PathBuf::from(&record.events_path);
     let events = std::fs::File::create(&events_path)?;
     let stderr = std::fs::File::create(&stderr_path)?;
-    let mut command = std::process::Command::new("codex");
+    let mut command = build_side_agent_command(cwd, prompt_text, &model, &output_path)?;
     command
-        .arg("exec")
-        .arg("--model")
-        .arg(model)
-        .arg("--full-auto")
-        .arg("--color")
-        .arg("never")
-        .arg("--json")
-        .arg("--skip-git-repo-check")
-        .arg("--output-last-message")
-        .arg(&output_path)
-        .arg("-C")
-        .arg(cwd)
-        .arg(prompt_text)
         .stdout(Stdio::from(events))
         .stderr(Stdio::from(stderr));
 
@@ -52,6 +40,38 @@ pub(crate) fn spawn_side_agent(
             let _ = store.mark_finished(&record.id, SideAgentStatus::Failed);
             Err(error)
         }
+    }
+}
+
+fn build_side_agent_command(
+    cwd: &Path,
+    prompt_text: &str,
+    model: &str,
+    output_path: &Path,
+) -> io::Result<std::process::Command> {
+    let mut command = std::process::Command::new(configured_codex_bin());
+    command
+        .arg("exec")
+        .arg("--model")
+        .arg(model)
+        .arg("--full-auto")
+        .arg("--color")
+        .arg("never")
+        .arg("--json")
+        .arg("--skip-git-repo-check")
+        .arg("--output-last-message")
+        .arg(output_path)
+        .arg("-C")
+        .arg(cwd)
+        .arg(prompt_text);
+
+    Ok(command)
+}
+
+fn configured_codex_bin() -> OsString {
+    match std::env::var_os("CODEX_BIN") {
+        Some(path) if !path.is_empty() => path,
+        _ => OsString::from("codex"),
     }
 }
 
@@ -181,4 +201,79 @@ pub(crate) fn current_review_mode() -> bool {
             .as_str(),
         "1" | "true" | "yes" | "review"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_side_agent_command, spawn_side_agent};
+    use crate::SideAgentStore;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        std::env::temp_dir().join(format!("vorker-shell-helper-{name}-{suffix}"))
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn side_agent_spawn_honors_configured_codex_bin_environment_path() {
+        let _guard = env_lock().lock().expect("env lock");
+        let root = unique_temp_dir("codex-bin");
+        let fake_bin_dir = root.join("bin");
+        let fake_codex = fake_bin_dir.join("codex-custom");
+        fs::create_dir_all(&fake_bin_dir).expect("bin dir");
+        fs::write(&fake_codex, "#!/bin/sh\nexit 0\n").expect("write fake codex");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&fake_codex).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&fake_codex, perms).expect("chmod");
+        }
+
+        let original_codex_bin = std::env::var_os("CODEX_BIN");
+        unsafe {
+            std::env::set_var("CODEX_BIN", &fake_codex);
+        }
+
+        let command = build_side_agent_command(
+            PathBuf::from("/workspace").as_path(),
+            "inspect auth boundary",
+            "gpt-5.4",
+            root.join("out.txt").as_path(),
+        )
+        .expect("command");
+        assert_eq!(command.get_program(), fake_codex.as_os_str());
+
+        let mut store =
+            SideAgentStore::open_at(root.join("agents.json")).expect("open side-agent store");
+        let result = spawn_side_agent(
+            PathBuf::from("/workspace").as_path(),
+            "inspect auth boundary",
+            &mut store,
+            &root.join("side-agents"),
+        );
+
+        unsafe {
+            match original_codex_bin {
+                Some(path) => std::env::set_var("CODEX_BIN", path),
+                None => std::env::remove_var("CODEX_BIN"),
+            }
+        }
+
+        let mut job =
+            result.expect("expected configured CODEX_BIN to be used for side-agent runtime");
+        let _ = job.child.kill();
+        let _ = fs::remove_dir_all(root);
+    }
 }

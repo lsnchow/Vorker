@@ -1,4 +1,7 @@
 use super::*;
+use std::time::{Duration, Instant};
+
+const BOOT_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub(crate) fn persist_dirty_thread(
     app: &mut App,
@@ -94,9 +97,14 @@ pub(crate) fn run_boot_sequence(
 ) -> io::Result<()> {
     let mut tick = 0usize;
     let minimum_ticks = boot_minimum_ticks();
+    let started_at = Instant::now();
 
     loop {
-        drain_bridge_events(app, bridge, pending_permission_reply);
+        if let Some(message) =
+            drain_bridge_events_with_status(app, bridge, pending_permission_reply)
+        {
+            return Err(io::Error::other(format!("ACP startup failed: {message}")));
+        }
 
         let model = app.selected_model_id().map(str::to_string);
         let ready = model.is_some();
@@ -119,7 +127,9 @@ pub(crate) fn run_boot_sequence(
             break;
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(80));
+        boot_timeout_result(started_at.elapsed(), BOOT_TIMEOUT)?;
+
+        std::thread::sleep(Duration::from_millis(80));
         tick = tick.saturating_add(1);
     }
 
@@ -131,61 +141,174 @@ pub(crate) fn drain_bridge_events(
     bridge: &mut AcpBridge,
     pending_permission_reply: &mut Option<tokio::sync::oneshot::Sender<Option<String>>>,
 ) {
+    let _ = drain_bridge_events_with_status(app, bridge, pending_permission_reply);
+}
+
+fn drain_bridge_events_with_status(
+    app: &mut App,
+    bridge: &mut AcpBridge,
+    pending_permission_reply: &mut Option<tokio::sync::oneshot::Sender<Option<String>>>,
+) -> Option<String> {
+    let mut startup_error = None;
     while let Ok(event) = bridge.evt_rx.try_recv() {
-        match event {
-            BridgeEvent::TextChunk { text } => app.apply_assistant_chunk(&text),
-            BridgeEvent::ToolCall { title } => app.apply_tool_notice(title, None),
-            BridgeEvent::ToolUpdate { title, detail } => {
-                if let Some(update) = tool_update_text(title, detail) {
-                    app.apply_tool_update(update);
-                }
-            }
-            BridgeEvent::PermissionRequest {
-                title,
-                options,
-                reply,
-            } => {
-                if app.approval_mode() == ApprovalMode::Auto {
-                    if let Some(option) = choose_auto_permission(&options) {
-                        let _ = reply.send(Some(option.option_id.clone()));
-                        app.apply_system_notice(format!("Auto-approved: {}", option.name));
-                    } else {
-                        let _ = reply.send(None);
-                        app.apply_system_notice(format!("Permission cancelled: {title}"));
-                    }
-                    continue;
-                }
-                if let Some(previous) = pending_permission_reply.take() {
-                    let _ = previous.send(None);
-                }
-                *pending_permission_reply = Some(reply);
-                app.open_permission_prompt(
-                    title,
-                    options
-                        .into_iter()
-                        .map(|option| PermissionOptionView {
-                            option_id: option.option_id,
-                            name: option.name,
-                        })
-                        .collect(),
-                );
-            }
-            BridgeEvent::SessionReady {
-                current_model,
-                available_models,
-            } => {
-                if let Some(current_model) = current_model {
-                    app.apply_session_ready(current_model, available_models);
-                } else if !available_models.is_empty() {
-                    app.set_model_choices(available_models);
-                }
-            }
-            BridgeEvent::ModelChanged { model } => app.apply_model_changed(model),
-            BridgeEvent::PromptDone => app.finish_prompt(),
-            BridgeEvent::Error { message } => {
-                app.apply_system_notice(format!("Error: {message}"));
-                app.finish_prompt();
+        if let Some(message) = apply_bridge_event(app, pending_permission_reply, event) {
+            startup_error = Some(message);
+        }
+    }
+    startup_error
+}
+
+fn apply_bridge_event(
+    app: &mut App,
+    pending_permission_reply: &mut Option<tokio::sync::oneshot::Sender<Option<String>>>,
+    event: BridgeEvent,
+) -> Option<String> {
+    match event {
+        BridgeEvent::TextChunk { text } => app.apply_assistant_chunk(&text),
+        BridgeEvent::ToolCall { title } => app.apply_tool_notice(title, None),
+        BridgeEvent::ToolUpdate { title, detail } => {
+            if let Some(update) = tool_update_text(title, detail) {
+                app.apply_tool_update(update);
             }
         }
+        BridgeEvent::PermissionRequest {
+            title,
+            options,
+            reply,
+        } => {
+            if app.approval_mode() == ApprovalMode::Auto {
+                if let Some(option) = choose_auto_permission(&options) {
+                    let _ = reply.send(Some(option.option_id.clone()));
+                    app.apply_system_notice(format!("Auto-approved: {}", option.name));
+                } else {
+                    let _ = reply.send(None);
+                    app.apply_system_notice(format!("Permission cancelled: {title}"));
+                }
+                return None;
+            }
+            if let Some(previous) = pending_permission_reply.take() {
+                let _ = previous.send(None);
+            }
+            *pending_permission_reply = Some(reply);
+            app.open_permission_prompt(
+                title,
+                options
+                    .into_iter()
+                    .map(|option| PermissionOptionView {
+                        option_id: option.option_id,
+                        name: option.name,
+                    })
+                    .collect(),
+            );
+        }
+        BridgeEvent::SessionReady {
+            current_model,
+            available_models,
+        } => {
+            if let Some(current_model) = current_model {
+                app.apply_session_ready(current_model, available_models);
+            } else if let Some(first_model) = available_models.first().cloned() {
+                app.apply_session_ready(first_model, available_models);
+            } else {
+                app.set_model_choices(available_models);
+            }
+        }
+        BridgeEvent::ModelChanged { model } => app.apply_model_changed(model),
+        BridgeEvent::PromptDone => app.finish_prompt(),
+        BridgeEvent::Error { message } => {
+            app.apply_system_notice(format!("Error: {message}"));
+            app.finish_prompt();
+            return Some(message);
+        }
+    }
+    None
+}
+
+fn boot_timeout_result(elapsed: Duration, timeout: Duration) -> io::Result<()> {
+    if elapsed >= timeout {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("ACP startup timed out after {}s", timeout.as_secs()),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BOOT_TIMEOUT, apply_bridge_event, boot_timeout_result};
+    use crate::App;
+    use crate::bridge::BridgeEvent;
+    use std::io;
+    use tokio::sync::oneshot;
+    use vorker_core::Snapshot;
+
+    #[test]
+    fn session_ready_without_current_model_selects_the_first_available_model() {
+        let mut app = App::new(Snapshot::default());
+        let mut pending_permission_reply = None;
+
+        let result = apply_bridge_event(
+            &mut app,
+            &mut pending_permission_reply,
+            BridgeEvent::SessionReady {
+                current_model: None,
+                available_models: vec!["gpt-5.4".to_string(), "gpt-5.3-codex".to_string()],
+            },
+        );
+
+        assert_eq!(result, None);
+        assert_eq!(app.selected_model_id(), Some("gpt-5.4"));
+        assert_eq!(
+            app.model_choices(),
+            vec!["gpt-5.4".to_string(), "gpt-5.3-codex".to_string()]
+        );
+    }
+
+    #[test]
+    fn bridge_error_returns_a_startup_failure_signal() {
+        let mut app = App::new(Snapshot::default());
+        let mut pending_permission_reply = None;
+
+        let result = apply_bridge_event(
+            &mut app,
+            &mut pending_permission_reply,
+            BridgeEvent::Error {
+                message: "copilot bootstrap failed".to_string(),
+            },
+        );
+
+        assert_eq!(result.as_deref(), Some("copilot bootstrap failed"));
+        assert!(
+            app.render(100, false)
+                .contains("Error: copilot bootstrap failed")
+        );
+    }
+
+    #[test]
+    fn boot_timeout_reports_a_timed_out_startup() {
+        let error = boot_timeout_result(BOOT_TIMEOUT, BOOT_TIMEOUT).expect_err("timeout error");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(error.to_string().contains("ACP startup timed out"));
+    }
+
+    #[test]
+    fn permission_request_can_still_be_buffered_while_boot_waits() {
+        let mut app = App::new(Snapshot::default());
+        let mut pending_permission_reply = None;
+        let (reply_tx, _reply_rx) = oneshot::channel();
+
+        let result = apply_bridge_event(
+            &mut app,
+            &mut pending_permission_reply,
+            BridgeEvent::PermissionRequest {
+                title: "Allow tool".to_string(),
+                options: Vec::new(),
+                reply: reply_tx,
+            },
+        );
+
+        assert_eq!(result, None);
+        assert!(pending_permission_reply.is_some());
     }
 }

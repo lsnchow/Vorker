@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import readline from "node:readline";
 
 const DEFAULT_READY_TIMEOUT_MS = 1000 * 45;
+const DEFAULT_STOP_TIMEOUT_MS = 1000 * 5;
 const DEFAULT_LOG_LIMIT = 80;
 
 function extractQuickTunnelUrl(line) {
@@ -39,6 +40,7 @@ export class TunnelManager extends EventEmitter {
     this.edgeProtocol = options.edgeProtocol ?? process.env.CLOUDFLARED_PROTOCOL ?? "http2";
     this.edgeIpVersion = options.edgeIpVersion ?? process.env.CLOUDFLARED_EDGE_IP_VERSION ?? "auto";
     this.readyTimeoutMs = options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
+    this.stopTimeoutMs = options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS;
     this.logLimit = options.logLimit ?? DEFAULT_LOG_LIMIT;
     this.child = null;
     this.stdoutRl = null;
@@ -48,6 +50,13 @@ export class TunnelManager extends EventEmitter {
     this.state = "idle";
     this.error = null;
     this.logs = [];
+  }
+
+  setPort(port) {
+    const parsed = Number.parseInt(String(port), 10);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      this.port = parsed;
+    }
   }
 
   snapshot() {
@@ -186,7 +195,7 @@ export class TunnelManager extends EventEmitter {
       this.stdoutRl = null;
       this.stderrRl = null;
       this.state = "idle";
-      if (priorState !== "stopped" && priorState !== "idle") {
+      if (priorState !== "stopping" && priorState !== "stopped" && priorState !== "idle") {
         this.error = `cloudflared exited (${formatExit(code, signal)}).`;
         this.pushLog(this.error, "error");
       }
@@ -237,7 +246,15 @@ export class TunnelManager extends EventEmitter {
     this.publish("share_state");
 
     await new Promise((resolve) => {
-      child.once("exit", () => resolve());
+      const forceKillTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, this.stopTimeoutMs);
+      child.once("exit", () => {
+        clearTimeout(forceKillTimer);
+        resolve();
+      });
       child.kill("SIGTERM");
     });
 

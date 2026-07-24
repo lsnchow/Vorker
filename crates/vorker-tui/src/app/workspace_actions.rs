@@ -7,7 +7,7 @@ pub(crate) fn handle_workspace_runtime_action(
     app: &mut App,
     stdout: &mut io::Stdout,
     global_root: &Path,
-    default_model: &Option<String>,
+    runtime_options: &RuntimeOptions,
     cwd: &mut PathBuf,
     workspace: &mut ProjectWorkspace,
     thread_store: &mut ThreadStore,
@@ -27,16 +27,13 @@ pub(crate) fn handle_workspace_runtime_action(
             if let Some(reply) = pending_permission_reply.take() {
                 let _ = reply.send(None);
             }
-            let next_bridge =
-                runtime.block_on(AcpBridge::start(cwd.clone(), None, default_model.clone()))?;
-            let old_bridge = std::mem::replace(bridge, next_bridge);
-            runtime.block_on(old_bridge.shutdown())?;
             let mut thread = thread_store.create_thread(&*cwd);
-            thread.model = default_model.clone();
+            thread.model = runtime_options.default_model.clone();
             thread.approval_mode = app.approval_mode();
             app.load_thread(thread);
             app.set_workspace_files(load_workspace_files(&*cwd));
             *thread_store = workspace.open_thread_store()?;
+            replace_bridge_for_app(runtime, bridge, cwd, app, runtime_options)?;
             Ok(false)
         }
         AppCommand::ListThreads => {
@@ -67,10 +64,6 @@ pub(crate) fn handle_workspace_runtime_action(
                 if let Some(reply) = pending_permission_reply.take() {
                     let _ = reply.send(None);
                 }
-                let next_bridge =
-                    runtime.block_on(AcpBridge::start(cwd.clone(), None, default_model.clone()))?;
-                let old_bridge = std::mem::replace(bridge, next_bridge);
-                runtime.block_on(old_bridge.shutdown())?;
                 *thread_store = workspace.open_thread_store()?;
                 *side_agent_store = workspace.open_side_agent_store()?;
                 *prompt_history_store = workspace.open_prompt_history_store()?;
@@ -81,8 +74,7 @@ pub(crate) fn handle_workspace_runtime_action(
                 app.set_prompt_history(prompt_history_for_app(prompt_history_store));
                 app.set_workspace_files(load_workspace_files(&*cwd));
                 refresh_skill_state(app, &*cwd, skill_store)?;
-                *bridge =
-                    runtime.block_on(AcpBridge::start(cwd.clone(), None, default_model.clone()))?;
+                replace_bridge_for_app(runtime, bridge, cwd, app, runtime_options)?;
             } else {
                 app.apply_system_notice(format!("Unknown thread id: {thread_id}"));
             }
@@ -104,10 +96,6 @@ pub(crate) fn handle_workspace_runtime_action(
             if let Some(reply) = pending_permission_reply.take() {
                 let _ = reply.send(None);
             }
-            let next_bridge =
-                runtime.block_on(AcpBridge::start(cwd.clone(), None, default_model.clone()))?;
-            let old_bridge = std::mem::replace(bridge, next_bridge);
-            runtime.block_on(old_bridge.shutdown())?;
             *thread_store = workspace.open_thread_store()?;
             *side_agent_store = workspace.open_side_agent_store()?;
             *prompt_history_store = workspace.open_prompt_history_store()?;
@@ -115,7 +103,7 @@ pub(crate) fn handle_workspace_runtime_action(
             *session_event_store = workspace.open_session_event_store()?;
             let thread = thread_store.latest_for_cwd(&*cwd).unwrap_or_else(|| {
                 let mut created = thread_store.create_thread(&*cwd);
-                created.model = default_model.clone();
+                created.model = runtime_options.default_model.clone();
                 created.approval_mode = app.approval_mode();
                 created
             });
@@ -131,8 +119,7 @@ pub(crate) fn handle_workspace_runtime_action(
                 .filter(|thread| thread.cwd == cwd_label)
                 .collect::<Vec<_>>();
             app.list_threads(&threads);
-            *bridge =
-                runtime.block_on(AcpBridge::start(cwd.clone(), None, default_model.clone()))?;
+            replace_bridge_for_app(runtime, bridge, cwd, app, runtime_options)?;
             Ok(false)
         }
         _ => Ok(false),

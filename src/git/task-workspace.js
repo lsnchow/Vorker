@@ -79,7 +79,7 @@ export class TaskWorkspaceManager {
   }
 
   async ensureTaskWorkspace(input) {
-    const baseBranch = await this.detectBaseBranch();
+    const baseBranch = input.baseBranch || (await this.detectBaseBranch());
     const branchName = this.buildBranchName(input.taskId, input.title);
     const workspacePath = this.buildWorkspacePath(input.taskId, input.title);
 
@@ -107,6 +107,88 @@ export class TaskWorkspaceManager {
       branchName,
       baseBranch,
     };
+  }
+
+  async listTaskWorkspaces() {
+    const output = await runGit(["worktree", "list", "--porcelain"], { cwd: this.repoRoot });
+    if (!output) {
+      return [];
+    }
+
+    const records = output
+      .split("\n\n")
+      .map((block) => block.trim())
+      .filter(Boolean);
+
+    return records
+      .map((record) => {
+        const entry = {
+          workspacePath: "",
+          branchName: "detached",
+        };
+
+        for (const line of record.split("\n")) {
+          if (line.startsWith("worktree ")) {
+            entry.workspacePath = line.slice("worktree ".length).trim();
+            continue;
+          }
+          if (line.startsWith("branch ")) {
+            entry.branchName = line.slice("branch ".length).trim().replace(/^refs\/heads\//, "");
+          }
+        }
+
+        return entry;
+      })
+      .filter((entry) => entry.workspacePath && entry.workspacePath.startsWith(`${this.worktreeRoot}${path.sep}`));
+  }
+
+  async removeTaskWorkspace(identifier, options = {}) {
+    const requested = String(identifier ?? "").trim();
+    if (!requested) {
+      throw new Error("A managed worktree name, branch, or path is required.");
+    }
+
+    const workspaces = await this.listTaskWorkspaces();
+    const requestedPath = path.resolve(this.repoRoot, requested);
+    const matches = workspaces.filter(
+      (workspace) =>
+        workspace.workspacePath === requestedPath ||
+        workspace.branchName === requested ||
+        path.basename(workspace.workspacePath) === requested,
+    );
+    if (matches.length !== 1) {
+      throw new Error(
+        matches.length === 0
+          ? `Unknown Vorker worktree: ${requested}`
+          : `Ambiguous Vorker worktree: ${requested}`,
+      );
+    }
+
+    const workspace = matches[0];
+    const relativePath = path.relative(this.worktreeRoot, workspace.workspacePath);
+    if (!relativePath || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+      throw new Error(`Refusing to remove a worktree outside ${this.worktreeRoot}.`);
+    }
+
+    const activeRoot = options.currentCwd
+      ? await runGit(["rev-parse", "--show-toplevel"], { cwd: options.currentCwd }).catch(() => null)
+      : null;
+    if (activeRoot && path.resolve(activeRoot) === path.resolve(workspace.workspacePath)) {
+      throw new Error("Refusing to remove the active worktree. Run this command from another worktree.");
+    }
+
+    const changedFiles = await this.listChangedFiles(workspace.workspacePath);
+    if (changedFiles.length > 0 && !options.force) {
+      throw new Error(
+        `Worktree has ${changedFiles.length} changed file(s); commit them or rerun with --force.`,
+      );
+    }
+
+    await runGit(
+      ["worktree", "remove", ...(options.force ? ["--force"] : []), workspace.workspacePath],
+      { cwd: this.repoRoot },
+    );
+    return { ...workspace, changedFiles };
   }
 
   async listChangedFiles(workspacePath) {

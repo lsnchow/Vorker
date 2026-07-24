@@ -1,7 +1,9 @@
 use std::io;
+use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use agent_client_protocol::{self as acp, Agent as _};
 use base64::Engine as _;
@@ -12,6 +14,10 @@ use tokio::task::JoinHandle;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 const COPILOT_CA_HOST: &str = "api.individual.githubcopilot.com";
+const ACP_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+const BRIDGE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const TLS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const TLS_IO_TIMEOUT: Duration = Duration::from_secs(5);
 static COPILOT_EXTRA_CA_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Debug)]
@@ -82,10 +88,15 @@ impl AcpBridge {
                 .build()
                 .map_err(io::Error::other)?;
             let local = tokio::task::LocalSet::new();
-            local.block_on(
+            let startup_evt_tx = evt_tx.clone();
+            let result = local.block_on(
                 &runtime,
                 bridge_main(cmd_rx, evt_tx, program, cwd, extra_ca_path, initial_model),
-            )
+            );
+            if let Err(error) = &result {
+                report_bridge_startup_error(&startup_evt_tx, error);
+            }
+            result
         });
 
         Ok(Self {
@@ -118,11 +129,18 @@ impl AcpBridge {
 
     pub async fn shutdown(self) -> io::Result<()> {
         let _ = self.cmd_tx.send(BridgeCommand::Shutdown).await;
-        match self.handle.await {
-            Ok(result) => result,
-            Err(error) => Err(io::Error::other(format!("bridge join failed: {error}"))),
+        match tokio::time::timeout(BRIDGE_SHUTDOWN_TIMEOUT, self.handle).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => Err(io::Error::other(format!("bridge join failed: {error}"))),
+            Err(_) => Err(timeout_error("bridge shutdown", BRIDGE_SHUTDOWN_TIMEOUT)),
         }
     }
+}
+
+fn report_bridge_startup_error(evt_tx: &mpsc::UnboundedSender<BridgeEvent>, error: &io::Error) {
+    let _ = evt_tx.send(BridgeEvent::Error {
+        message: error.to_string(),
+    });
 }
 
 async fn bridge_main(
@@ -170,27 +188,34 @@ async fn bridge_main(
         }
     });
 
-    conn.initialize(
-        acp::InitializeRequest::new(acp::ProtocolVersion::V1)
-            .client_capabilities(
-                acp::ClientCapabilities::new()
-                    .fs(acp::FileSystemCapabilities::new()
-                        .read_text_file(true)
-                        .write_text_file(true))
-                    .terminal(true),
-            )
-            .client_info(acp::Implementation::new(
-                "vorker",
-                env!("CARGO_PKG_VERSION"),
-            )),
+    run_with_timeout(
+        "acp initialize",
+        ACP_STARTUP_TIMEOUT,
+        conn.initialize(
+            acp::InitializeRequest::new(acp::ProtocolVersion::V1)
+                .client_capabilities(
+                    acp::ClientCapabilities::new()
+                        .fs(acp::FileSystemCapabilities::new()
+                            .read_text_file(true)
+                            .write_text_file(true))
+                        .terminal(true),
+                )
+                .client_info(acp::Implementation::new(
+                    "vorker",
+                    env!("CARGO_PKG_VERSION"),
+                )),
+        ),
     )
-    .await
+    .await?
     .map_err(|error| io::Error::other(format!("acp initialize failed: {error}")))?;
 
-    let session = conn
-        .new_session(acp::NewSessionRequest::new(cwd))
-        .await
-        .map_err(|error| io::Error::other(format!("acp new_session failed: {error}")))?;
+    let session = run_with_timeout(
+        "acp new_session",
+        ACP_STARTUP_TIMEOUT,
+        conn.new_session(acp::NewSessionRequest::new(cwd)),
+    )
+    .await?
+    .map_err(|error| io::Error::other(format!("acp new_session failed: {error}")))?;
     let session_id = session.session_id;
     let mut current_model = session
         .models
@@ -212,11 +237,15 @@ async fn bridge_main(
         && current_model.as_deref() != Some(model.as_str())
         && available_models.iter().any(|available| available == &model)
     {
-        conn.set_session_model(acp::SetSessionModelRequest::new(
-            session_id.clone(),
-            model.clone(),
-        ))
-        .await
+        run_with_timeout(
+            "acp set_session_model",
+            ACP_STARTUP_TIMEOUT,
+            conn.set_session_model(acp::SetSessionModelRequest::new(
+                session_id.clone(),
+                model.clone(),
+            )),
+        )
+        .await?
         .map_err(|error| io::Error::other(format!("acp set_session_model failed: {error}")))?;
         current_model = Some(model);
     }
@@ -280,6 +309,23 @@ async fn bridge_main(
     Ok(())
 }
 
+async fn run_with_timeout<T>(
+    operation: &'static str,
+    timeout: Duration,
+    future: impl std::future::Future<Output = T>,
+) -> io::Result<T> {
+    tokio::time::timeout(timeout, future)
+        .await
+        .map_err(|_| timeout_error(operation, timeout))
+}
+
+fn timeout_error(operation: &str, timeout: Duration) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("{operation} timed out after {}s", timeout.as_secs()),
+    )
+}
+
 fn ensure_copilot_extra_ca_file() -> io::Result<PathBuf> {
     if let Ok(path) = std::env::var("NODE_EXTRA_CA_CERTS")
         && !path.trim().is_empty()
@@ -309,8 +355,15 @@ fn fetch_copilot_cert_chain_pem() -> io::Result<String> {
         .map_err(|error| io::Error::other(format!("invalid server name: {error}")))?;
     let connection = ClientConnection::new(Arc::new(config), server_name)
         .map_err(|error| io::Error::other(format!("tls client init failed: {error}")))?;
-    let socket = std::net::TcpStream::connect((COPILOT_CA_HOST, 443))
+    let address = resolve_copilot_socket_address()?;
+    let socket = std::net::TcpStream::connect_timeout(&address, TLS_CONNECT_TIMEOUT)
         .map_err(|error| io::Error::other(format!("tls tcp connect failed: {error}")))?;
+    socket
+        .set_read_timeout(Some(TLS_IO_TIMEOUT))
+        .map_err(|error| io::Error::other(format!("tls read timeout failed: {error}")))?;
+    socket
+        .set_write_timeout(Some(TLS_IO_TIMEOUT))
+        .map_err(|error| io::Error::other(format!("tls write timeout failed: {error}")))?;
     let mut tls = StreamOwned::new(connection, socket);
 
     while tls.conn.is_handshaking() {
@@ -332,6 +385,13 @@ fn fetch_copilot_cert_chain_pem() -> io::Result<String> {
         pem.push_str(&pem_encode(cert.as_ref()));
     }
     Ok(pem)
+}
+
+fn resolve_copilot_socket_address() -> io::Result<std::net::SocketAddr> {
+    (COPILOT_CA_HOST, 443)
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| io::Error::other("tls tcp connect resolved no addresses"))
 }
 
 fn pem_encode(bytes: &[u8]) -> String {
@@ -433,7 +493,13 @@ impl acp::Client for BridgedAcpClient {
 
 #[cfg(test)]
 mod tests {
-    use super::pem_encode;
+    use super::{
+        BRIDGE_SHUTDOWN_TIMEOUT, BridgeEvent, pem_encode, report_bridge_startup_error,
+        resolve_copilot_socket_address, run_with_timeout, timeout_error,
+    };
+    use std::io;
+    use std::time::Duration;
+    use tokio::sync::mpsc;
 
     #[test]
     fn pem_encode_wraps_der_bytes_as_certificate_pem() {
@@ -441,5 +507,49 @@ mod tests {
             pem_encode(&[0, 1, 2]),
             "-----BEGIN CERTIFICATE-----\nAAEC\n-----END CERTIFICATE-----\n"
         );
+    }
+
+    #[test]
+    fn startup_errors_are_forwarded_as_bridge_events() {
+        let (evt_tx, mut evt_rx) = mpsc::unbounded_channel();
+        report_bridge_startup_error(&evt_tx, &io::Error::other("copilot failed"));
+
+        match evt_rx.try_recv() {
+            Ok(BridgeEvent::Error { message }) => assert_eq!(message, "copilot failed"),
+            other => panic!("expected startup error event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn timeout_error_uses_timed_out_kind() {
+        let error = timeout_error("bridge shutdown", BRIDGE_SHUTDOWN_TIMEOUT);
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(error.to_string().contains("bridge shutdown timed out"));
+    }
+
+    #[test]
+    fn startup_timeout_helper_fails_slow_operations() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let error = runtime
+            .block_on(run_with_timeout(
+                "acp initialize",
+                Duration::from_millis(5),
+                async {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                },
+            ))
+            .expect_err("timeout error");
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(error.to_string().contains("acp initialize timed out"));
+    }
+
+    #[test]
+    fn resolve_copilot_socket_address_returns_an_address() {
+        let address = resolve_copilot_socket_address().expect("socket address");
+        assert_eq!(address.port(), 443);
     }
 }

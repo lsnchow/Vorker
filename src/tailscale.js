@@ -62,8 +62,8 @@ async function tailscaleStatus(options) {
 
 export async function runTailnet(options) {
   const port = options.port ?? "4173";
-  const serveCommand = buildTailscaleServeCommand({ ...options, port });
   if (options.dryRun) {
+    const serveCommand = buildTailscaleServeCommand({ ...options, port });
     process.stdout.write(`Local URL: http://127.0.0.1:${port}\n`);
     process.stdout.write(`${serveCommand.bin} ${serveCommand.args.join(" ")}\n`);
     return;
@@ -80,8 +80,29 @@ export async function runTailnet(options) {
   });
 
   const cleanup = async () => {
+    removeSignalHandlers();
     await localServer.shutdown();
   };
+
+  let signalHandlersInstalled = false;
+  const handleSigint = () => {
+    void shutdownAndExit();
+  };
+  const handleSigterm = () => {
+    void shutdownAndExit();
+  };
+  const removeSignalHandlers = () => {
+    if (!signalHandlersInstalled) {
+      return;
+    }
+    signalHandlersInstalled = false;
+    process.removeListener("SIGINT", handleSigint);
+    process.removeListener("SIGTERM", handleSigterm);
+  };
+  const serveCommand = buildTailscaleServeCommand({
+    ...options,
+    port: localServer.normalized.port,
+  });
 
   try {
     await runCommand(serveCommand.bin, serveCommand.args, options);
@@ -104,12 +125,9 @@ export async function runTailnet(options) {
     process.exit(0);
   };
 
-  process.on("SIGINT", () => {
-    void shutdownAndExit();
-  });
-  process.on("SIGTERM", () => {
-    void shutdownAndExit();
-  });
+  process.on("SIGINT", handleSigint);
+  process.on("SIGTERM", handleSigterm);
+  signalHandlersInstalled = true;
 
   await new Promise(() => {});
 }

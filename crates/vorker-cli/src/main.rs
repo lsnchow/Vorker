@@ -8,14 +8,14 @@ use vorker_cli::adversarial::{
 use vorker_cli::ralph::{RalphLaunchRequest, build_ralph_launch, run_ralph_launch};
 use vorker_core::EventLog;
 use vorker_preflight::{LocalContainerSandbox, PreflightRequest, PreflightRunner};
-use vorker_tui::{render_hyperloop_mock, render_once, run_app};
+use vorker_tui::{RuntimeOptions, render_hyperloop_mock, render_once, run_app};
 
 const DEFAULT_PRIMARY_MODEL: &str = "claude-opus-4.5";
 
 #[derive(Debug, Parser)]
 #[command(
     name = "vorker",
-    about = "Rust-native Vorker runtime",
+    about = "Rust-native Vorker runtime; use the Node wrapper for serve/share",
     disable_help_subcommand = true
 )]
 struct Cli {
@@ -56,10 +56,7 @@ enum Command {
     Ralph(RalphOptions),
     Demo { scenario: String },
     Preflight { repo: String },
-    Repl,
     Chat { prompt: Option<String> },
-    Serve(ServeOptions),
-    Share(ShareOptions),
     Help,
 }
 
@@ -107,32 +104,6 @@ struct RalphOptions {
     task: Vec<String>,
 }
 
-#[derive(Debug, Args, Default)]
-struct ServeOptions {
-    #[arg(long, default_value = "127.0.0.1")]
-    host: String,
-    #[arg(long, default_value_t = 4173)]
-    port: u16,
-    #[arg(long = "tls-key")]
-    tls_key: Option<String>,
-    #[arg(long = "tls-cert")]
-    tls_cert: Option<String>,
-    #[arg(long = "trust-proxy", default_value_t = false)]
-    trust_proxy: bool,
-    #[arg(long = "allow-insecure-http", default_value_t = false)]
-    allow_insecure_http: bool,
-}
-
-#[derive(Debug, Args, Default)]
-struct ShareOptions {
-    #[arg(long = "cloudflared-bin")]
-    cloudflared_bin: Option<String>,
-    #[arg(long = "cloudflared-protocol")]
-    cloudflared_protocol: Option<String>,
-    #[arg(long = "cloudflared-edge-ip-version")]
-    cloudflared_edge_ip_version: Option<String>,
-}
-
 fn main() {
     let cli = Cli::parse();
     if let Some(cwd) = &cli.shared.cwd
@@ -144,13 +115,17 @@ fn main() {
 
     match cli.command {
         Some(Command::Tui(tui)) => {
-            let model = default_primary_model(&cli.shared);
+            let runtime_options = cli.shared.runtime_options();
+            configure_tui_environment(&cli.shared);
             if tui.once {
-                println!("{}", render_once(120, Some(model.clone())));
+                println!(
+                    "{}",
+                    render_once(120, runtime_options.default_model.clone())
+                );
             } else if let Err(error) = run_app(
                 cli.shared.inline_terminal(),
                 cli.shared.auto_approve,
-                Some(model),
+                runtime_options,
             ) {
                 eprintln!("{error}");
                 std::process::exit(1);
@@ -183,31 +158,23 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Some(Command::Repl) => {
-            println!("Rust REPL bootstrap not wired yet.");
-        }
         Some(Command::Chat { prompt }) => {
             if let Err(error) = run_chat(prompt, &cli.shared) {
                 eprintln!("{error}");
                 std::process::exit(1);
             }
         }
-        Some(Command::Serve(_)) => {
-            println!("Rust server bootstrap not wired yet.");
-        }
-        Some(Command::Share(_)) => {
-            println!("Rust share bootstrap not wired yet.");
-        }
         Some(Command::Help) => {
             let _ = Cli::command().print_help();
             println!();
         }
         None => {
-            let model = default_primary_model(&cli.shared);
+            let runtime_options = cli.shared.runtime_options();
+            configure_tui_environment(&cli.shared);
             if let Err(error) = run_app(
                 cli.shared.inline_terminal(),
                 cli.shared.auto_approve,
-                Some(model),
+                runtime_options,
             ) {
                 eprintln!("{error}");
                 std::process::exit(1);
@@ -219,6 +186,21 @@ fn main() {
 impl SharedOptions {
     fn inline_terminal(&self) -> bool {
         self.no_alt_screen || !self.alt_screen
+    }
+
+    fn runtime_options(&self) -> RuntimeOptions {
+        RuntimeOptions {
+            copilot_bin: self.copilot_bin.clone(),
+            default_model: Some(default_primary_model(self)),
+        }
+    }
+}
+
+fn configure_tui_environment(shared: &SharedOptions) {
+    if let Some(codex_bin) = &shared.codex_bin {
+        unsafe {
+            env::set_var("CODEX_BIN", codex_bin);
+        }
     }
 }
 
@@ -400,4 +382,50 @@ fn resolve_prompt(
         return Err(io::Error::other("chat requires a prompt").into());
     }
     Ok(stdin)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, CommandFactory, SharedOptions};
+    use clap::Parser;
+
+    #[test]
+    fn rust_cli_help_omits_unimplemented_stub_commands() {
+        let mut command = Cli::command();
+        let mut help = Vec::new();
+        command.write_long_help(&mut help).expect("help");
+        let help = String::from_utf8(help).expect("utf8");
+
+        assert!(help.contains("tui"));
+        assert!(help.contains("chat"));
+        assert!(!help.contains("\n  repl"));
+        assert!(!help.contains("\n  serve"));
+        assert!(!help.contains("\n  share"));
+    }
+
+    #[test]
+    fn rust_cli_rejects_removed_stub_subcommands() {
+        assert!(Cli::try_parse_from(["vorker", "serve"]).is_err());
+        assert!(Cli::try_parse_from(["vorker", "share"]).is_err());
+        assert!(Cli::try_parse_from(["vorker", "repl"]).is_err());
+    }
+
+    #[test]
+    fn runtime_options_preserve_configured_tui_binaries() {
+        let shared = SharedOptions {
+            copilot_bin: Some("/tmp/copilot-custom".to_string()),
+            codex_bin: Some("/tmp/codex-custom".to_string()),
+            model: Some("gpt-test".to_string()),
+            ..SharedOptions::default()
+        };
+
+        let runtime_options = shared.runtime_options();
+
+        assert_eq!(
+            runtime_options.copilot_bin.as_deref(),
+            Some("/tmp/copilot-custom")
+        );
+        assert_eq!(runtime_options.default_model.as_deref(), Some("gpt-test"));
+        assert_eq!(shared.codex_bin.as_deref(), Some("/tmp/codex-custom"));
+    }
 }
