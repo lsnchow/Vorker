@@ -8,7 +8,7 @@
 
 </div>
 
-*This project is archieved and deprecated, I made this a long time ago and was sitting on the repo. Github copilot (for students at least) has changed and didn't seem worthwhile to continue.*
+* !!!! 🛑 This project is archieved and deprecated, I made this a long time ago and was sitting on the repo. Github copilot (for students at least) has changed and didn't seem worthwhile to continue 🛑 !!!*
 
 
 Vorker wraps a fast Rust shell around Copilot ACP, project context, adversarial review, Codex-backed side agents, and isolated git task worktrees. Threads, reports, skills, and agent logs stay local under `~/.vorker`.
